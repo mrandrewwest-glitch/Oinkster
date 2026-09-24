@@ -1,10 +1,10 @@
 // Oinkster clickable demo. Runs the real savings engine (src/) in the browser,
 // with the mock bank standing in for Basiq and a "time machine" clock.
-import { SavingsService, GOAL_IDEAS, GOAL_CATEGORIES, HttpError } from './engine/services/savings.js';
+import { SavingsService, GOAL_IDEAS, GOAL_CATEGORIES, HttpError, describeDestination } from './engine/services/savings.js';
 import { Notifier } from './engine/services/notifier.js';
 import { MockProvider } from './engine/providers/mock.js';
 import { Store } from './engine/store.js';
-import { formatAud } from './engine/domain/money.js';
+import { formatAud, depositFee } from './engine/domain/money.js';
 
 const KEYS = { data: 'oinkster-demo-data', bank: 'oinkster-demo-bank', offset: 'oinkster-demo-offset' };
 const DAY_MS = 86_400_000;
@@ -48,6 +48,18 @@ const service = new SavingsService({
   clock,
   collectionAccount: { accountName: 'Oinkster Savings Trust', bsb: '033-000', accountNumber: '10203040' },
 });
+
+const FEE_PCT = `${service.depositFeeBps / 100}%`;
+const feeLine = (grossCents) => {
+  const fee = depositFee(grossCents, service.depositFeeBps);
+  return `${FEE_PCT} fee: ${aud(fee)} · ${aud(grossCents - fee)} is saved`;
+};
+const METHOD = {
+  bank_transfer: { icon: '🏦', label: 'Bank transfer' },
+  bpay: { icon: '🧾', label: 'BPAY' },
+  payto: { icon: '⚡', label: 'PayTo' },
+};
+const destIcon = (to) => METHOD[to.method ?? 'bank_transfer'].icon;
 
 const currentUser = () => store.allUsers()[0] ?? null;
 const paidOutCents = (goalId) => -(store.ledgerForGoal(goalId).find((e) => e.type === 'payout')?.amountCents ?? 0);
@@ -160,7 +172,7 @@ function viewWelcome() {
   <section class="hero">
     <div>
       <h1>Save smarter, not harder.</h1>
-      <p class="lede">Oinkster is a piggy bank for grown-ups. Set a goal, lock the money away until you hit it, and we pay it straight onto your mortgage, your credit card or your next adventure. No fees. Ever.</p>
+      <p class="lede">Oinkster is a piggy bank for grown-ups. Set a goal, lock the money away until you hit it, and we pay it straight onto your mortgage, your credit card or your next adventure. One simple 1.5% fee on money in, and nothing else.</p>
       <form class="card" id="signup-form">
         <h2>Start the demo</h2>
         <div class="row">
@@ -197,7 +209,7 @@ function viewDashboard(user) {
           <div class="muted small">${CATEGORY[g.category].icon} ${CATEGORY[g.category].label}</div>
           <h3>${esc(g.name)}</h3>
           ${g.status === 'paid_out'
-            ? `<div class="small">Paid ${aud(paidOutCents(g.id))} to ${esc(g.payoutAccount.accountName)} on ${fmtDate(g.completedAt)} 🎉</div>`
+            ? `<div class="small">Paid ${aud(paidOutCents(g.id))} to ${esc(g.payoutAccount.accountName)} ${g.payoutAccount.method === 'bpay' ? 'by BPAY' : g.payoutAccount.method === 'payto' ? 'by PayTo' : ''} on ${fmtDate(g.completedAt)} 🎉</div>`
             : `<div class="progress" aria-hidden="true"><span style="width:${g.plan.percentComplete}%"></span></div>
                <div class="small num"><strong>${aud(g.balanceCents)}</strong> of ${audShort(g.targetCents)} · ${g.plan.daysLeft} days left</div>`}
           <div class="chips">${statusChips(g)}</div>
@@ -213,7 +225,7 @@ function viewDashboard(user) {
       <div class="big-number num">${aud(dash.totalSavedCents)}</div>
       <div class="muted small num">${active.length} active goal${active.length === 1 ? '' : 's'} · ${pct}% of ${audShort(dash.totalTargetCents)}</div>
     </div>
-    <div><span class="fee-badge">✓ Fees paid: $0.00. Ever.</span></div>
+    <div><span class="fee-badge">Fees paid: ${aud(dash.totalFeesPaidCents)}</span><div class="hint">A flat ${FEE_PCT} on money in. No account, payout or exit fees.</div></div>
   </div>
 
   <div class="section-head"><h2>Your goals</h2><a class="btn" href="#/new">+ New goal</a></div>
@@ -236,6 +248,7 @@ function viewDashboard(user) {
           <div class="money-input"><input id="payday-amount" name="amount" type="number" min="1" step="0.01" value="${(Math.max(payroll.suggestedPerPayCents, 100) / 100).toFixed(0)}" inputmode="decimal"></div></div>
         <button class="btn" type="submit">Payday 💸</button>
       </form>
+      <p class="hint" id="payday-fee"></p>
       <p class="hint">Suggested per fortnightly pay to stay on track: ${aud(payroll.suggestedPerPayCents)}</p>` : ''}
     </section>
 
@@ -253,6 +266,7 @@ function viewNewGoal(user, prefill = {}) {
   const hasOthers = store.goalsForUser(user.id).some((g) => g.status === 'active');
   const usedPct = store.goalsForUser(user.id).filter((g) => g.status === 'active').reduce((s, g) => s + g.payrollAllocationPercent, 0);
   const v = { name: '', category: 'other', target: 5000, months: 6, ...prefill };
+  const method = v.method ?? (v.category === 'credit_card' ? 'bpay' : 'bank_transfer');
   return `
   <a class="back" href="#/">← Back</a>
   <h1>New savings goal</h1>
@@ -274,12 +288,35 @@ function viewNewGoal(user, prefill = {}) {
 
     <fieldset>
       <legend>Where the money goes when you're done</legend>
-      <div class="field"><label for="p-name">Account name</label><input id="p-name" name="accountName" required value="${v.category === 'credit_card' ? 'My Visa' : v.category === 'house' ? 'Home loan' : 'Everyday account'}"></div>
-      <div class="row">
-        <div class="field"><label for="p-bsb">BSB</label><input id="p-bsb" name="bsb" required inputmode="numeric" value="062-000" placeholder="000-000"></div>
-        <div class="field"><label for="p-acc">Account number</label><input id="p-acc" name="accountNumber" required inputmode="numeric" value="12345678"></div>
+      <div class="field">
+        <span class="label">Pay it by</span>
+        <div class="tabs" role="radiogroup" aria-label="Payment method">
+          ${Object.entries(METHOD).map(([k, m]) => `<label class="chip-btn method-chip"><input type="radio" name="method" value="${k}" ${k === method ? 'checked' : ''}> ${m.icon} ${m.label}</label>`).join('')}
+        </div>
       </div>
-      <div class="field"><label for="p-ref">Payment reference (optional)</label><input id="p-ref" name="reference" placeholder="e.g. loan or card number"></div>
+      <div class="field"><label for="p-name">${method === 'bank_transfer' ? 'Account name' : 'Biller or payee name'}</label><input id="p-name" name="accountName" required value="${v.category === 'credit_card' ? 'My Visa' : v.category === 'house' ? 'Home loan' : 'Everyday account'}"></div>
+      <div data-method="bank_transfer" ${method === 'bank_transfer' ? '' : 'hidden'}>
+        <div class="row">
+          <div class="field"><label for="p-bsb">BSB</label><input id="p-bsb" name="bsb" required inputmode="numeric" value="062-000" placeholder="000-000"></div>
+          <div class="field"><label for="p-acc">Account number</label><input id="p-acc" name="accountNumber" required inputmode="numeric" value="12345678"></div>
+        </div>
+        <div class="field"><label for="p-ref">Payment reference (optional)</label><input id="p-ref" name="reference" placeholder="e.g. loan number"></div>
+      </div>
+      <div data-method="bpay" ${method === 'bpay' ? '' : 'hidden'}>
+        <div class="row">
+          <div class="field"><label for="p-biller">Biller code</label><input id="p-biller" name="billerCode" required inputmode="numeric" value="24281"></div>
+          <div class="field"><label for="p-crn">Reference number (CRN)</label><input id="p-crn" name="crn" required inputmode="numeric" value="4564001234567890"></div>
+        </div>
+        <p class="hint">Both are on your bill or card statement, next to the BPAY logo.</p>
+      </div>
+      <div data-method="payto" ${method === 'payto' ? '' : 'hidden'}>
+        <div class="row">
+          <div class="field"><label for="p-idtype">PayID type</label><select id="p-idtype" name="payIdType"><option value="email">Email</option><option value="phone">Mobile</option><option value="abn">ABN</option></select></div>
+          <div class="field"><label for="p-payid">Biller's PayID</label><input id="p-payid" name="payId" required value="payments@mycardco.com.au"></div>
+        </div>
+        <div class="field"><label for="p-pref">Payment reference (optional)</label><input id="p-pref" name="payRef" placeholder="e.g. card number"></div>
+        <p class="hint">Paid instantly over the NPP under a PayTo agreement with your biller.</p>
+      </div>
     </fieldset>
 
     <fieldset>
@@ -334,7 +371,7 @@ function viewGoal(goalId, ui) {
         </form></details>`;
   } else {
     const why = { target_reached: 'You hit your target!', deadline_passed: 'Your timeline is up.', early_release: 'The cooling-off period is over.' }[lock.reason];
-    lockBox = `<div class="lock-box open"><span class="icon">🔓</span><div><strong>${why}</strong><br><span class="small">Pay ${aud(goal.balanceCents)} into ${esc(goal.payoutAccount.accountName)} (${esc(goal.payoutAccount.bsb)} ${esc(goal.payoutAccount.accountNumber)}).</span></div></div>
+    lockBox = `<div class="lock-box open"><span class="icon">🔓</span><div><strong>${why}</strong><br><span class="small">Pay ${aud(goal.balanceCents)} to ${esc(describeDestination(goal.payoutAccount))}.</span></div></div>
       <button class="btn btn-block" id="payout-btn" ${goal.balanceCents ? '' : 'disabled'}>Pay out ${aud(goal.balanceCents)}</button>`;
   }
 
@@ -350,6 +387,7 @@ function viewGoal(goalId, ui) {
           <div class="field" style="margin:0"><label for="dep-amount">Amount</label><div class="money-input"><input id="dep-amount" name="amount" type="number" min="1" step="0.01" required value="${(Math.max(plan.requiredPerPeriodCents.fortnightly, 100) / 100).toFixed(0)}" inputmode="decimal"></div></div>
           <button class="btn" type="submit">Deposit</button>
         </form>
+        <p class="hint" id="deposit-fee"></p>
         <p class="hint">Pulled from your linked Everyday Account by PayTo. Payday deposits are on the home screen.</p>`
       : goal.roundups.enabled ? `
         <p class="small muted">Every card purchase is rounded up to the next ${audShort(goal.roundups.multipleCents)} and the spare change goes into this goal.</p>
@@ -358,7 +396,8 @@ function viewGoal(goalId, ui) {
           const r = (-t.amountCents) % goal.roundups.multipleCents;
           return `<li><span>${esc(t.description)}</span><span class="num">${aud(-t.amountCents)} <span class="roundup">+${aud(r ? goal.roundups.multipleCents - r : 0)}</span></span></li>`;
         }).join('')}</ul>
-        <button class="btn btn-block" id="sweep-btn" type="button">Save ${aud(pendingRoundups)} in round-ups</button>` : ''}`
+        <button class="btn btn-block" id="sweep-btn" type="button">Save ${aud(pendingRoundups)} in round-ups</button>
+        <p class="hint">${feeLine(pendingRoundups)}</p>` : ''}`
       : `<p class="muted small">Round-ups are off for this goal.</p><button class="btn btn-secondary" id="enable-roundups" type="button">Turn on round-ups</button>`}
     </section>`;
 
@@ -387,7 +426,9 @@ function viewGoal(goalId, ui) {
   <div class="grid grid-2" style="margin-top:16px">
     <div class="stack">
       ${addMoney}
-      <section class="card"><h2>${done ? 'Paid into' : 'Getting your money'}</h2>${lockBox}</section>
+      <section class="card"><h2>${done ? 'Paid into' : 'Getting your money'}</h2>
+        <p class="small"><span class="pill chip-locked">${destIcon(goal.payoutAccount)} ${METHOD[goal.payoutAccount.method ?? 'bank_transfer'].label}</span> ${esc(describeDestination(goal.payoutAccount))}</p>
+        ${lockBox}</section>
     </div>
     <div class="stack">
       ${done ? '' : `
@@ -410,8 +451,8 @@ function viewGoal(goalId, ui) {
       <section class="card">
         <h2>Activity</h2>
         ${ledger.length ? `<div class="table-wrap"><table>
-          <thead><tr><th>Date</th><th>What</th><th class="amt">Amount</th><th class="amt">Fee</th></tr></thead>
-          <tbody>${ledger.map((e) => `<tr><td>${new Date(e.createdAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}</td><td class="desc">${SOURCE_LABEL[e.source] ?? esc(e.source)}<div class="muted small">${esc(e.description)}</div></td><td class="amt ${e.amountCents >= 0 ? 'pos' : 'neg'}">${e.amountCents >= 0 ? '+' : '−'}${aud(Math.abs(e.amountCents))}</td><td class="amt">${aud(e.feeCents)}</td></tr>`).join('')}</tbody>
+          <thead><tr><th>Date</th><th>What</th><th class="amt">Amount</th><th class="amt fee-col">Fee</th></tr></thead>
+          <tbody>${ledger.map((e) => `<tr><td>${new Date(e.createdAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}</td><td class="desc">${SOURCE_LABEL[e.source] ?? esc(e.source)}<div class="muted small">${esc(e.description)}${e.type === 'deposit' && e.grossCents ? ` · ${aud(e.grossCents)} in, ${aud(e.feeCents)} fee` : ''}</div></td><td class="amt ${e.amountCents >= 0 ? 'pos' : 'neg'}">${e.amountCents >= 0 ? '+' : '−'}${aud(Math.abs(e.amountCents))}</td><td class="amt fee-col">${aud(e.feeCents)}</td></tr>`).join('')}</tbody>
         </table></div>` : '<p class="muted small">Nothing yet. Make your first deposit!</p>'}
       </section>
     </div>
@@ -464,7 +505,7 @@ async function loadSample() {
   const user = await service.createUser({ firstName: 'Andrew', lastName: 'Demo', email: 'andrew@example.com' });
   const card = service.createGoal(user.id, {
     name: 'Clear the credit card', category: 'credit_card', targetAmount: 5000, timelineMonths: 6,
-    payoutAccount: { accountName: 'My Visa', bsb: '062-000', accountNumber: '45640012', reference: '4564 0012 3456 7890' },
+    payoutAccount: { method: 'bpay', accountName: 'My Visa', billerCode: '24281', crn: '4564001234567890' },
     payrollAllocationPercent: 60, roundups: { enabled: true },
     notifications: { reminders: 'fortnightly', statements: 'monthly', channel: 'push' },
   });
@@ -478,12 +519,22 @@ async function loadSample() {
   return user;
 }
 
+function bindFeePreview(inputId, hintId) {
+  const input = document.getElementById(inputId);
+  const hint = document.getElementById(hintId);
+  if (!input || !hint) return;
+  const update = () => { hint.textContent = feeLine(Math.round((Number(input.value) || 0) * 100)); };
+  input.addEventListener('input', update);
+  update();
+}
+
 function bindDashboard(user) {
+  bindFeePreview('payday-amount', 'payday-fee');
   document.getElementById('payday-form')?.addEventListener('submit', (e) => {
     e.preventDefault();
     const amount = Number(formData(e.target).amount);
     run(() => service.receiveIncomingPayment({ reference: user.payrollReference, amount, payerName: 'Acme Pty Ltd' }),
-      (r) => `💸 Payday! ${aud(Math.round(amount * 100))} split across ${r.entries.length} goal${r.entries.length === 1 ? '' : 's'}${r.payouts.length ? '. A goal was completed and paid out 🎉' : ''}`);
+      (r) => `💸 Payday! ${aud(Math.round(amount * 100))} (${aud(r.entries.reduce((t, x) => t + x.feeCents, 0))} fee) split across ${r.entries.length} goal${r.entries.length === 1 ? '' : 's'}${r.payouts.length ? '. A goal was completed and paid out 🎉' : ''}`);
   });
 }
 
@@ -497,6 +548,16 @@ function bindNewGoal(user) {
     document.getElementById('months-out').textContent = `${m} month${m === 1 ? '' : 's'}`;
     document.getElementById('plan-hint').textContent = t > 0 ? `That's about ${aud(Math.ceil(t / m))} a month, or ${aud(Math.ceil(t / Math.ceil((m * 365.25) / 12 / 14)))} a fortnight.` : '';
   };
+  const syncMethod = () => {
+    const chosen = form.querySelector('input[name="method"]:checked').value;
+    form.querySelectorAll('[data-method]').forEach((el) => {
+      el.hidden = el.dataset.method !== chosen;
+      el.querySelectorAll('input, select').forEach((i) => { i.disabled = el.hidden; });
+    });
+    form.querySelector('label[for="p-name"]').textContent = chosen === 'bank_transfer' ? 'Account name' : 'Biller or payee name';
+  };
+  form.querySelectorAll('input[name="method"]').forEach((r) => r.addEventListener('change', syncMethod));
+  syncMethod();
   months.addEventListener('input', updateHint);
   target.addEventListener('input', updateHint);
   updateHint();
@@ -516,7 +577,11 @@ function bindNewGoal(user) {
       category: f.category,
       targetAmount: Number(f.targetAmount),
       timelineMonths: Number(f.timelineMonths),
-      payoutAccount: { accountName: f.accountName, bsb: f.bsb, accountNumber: f.accountNumber, reference: f.reference || undefined },
+      payoutAccount: f.method === 'bpay'
+        ? { method: 'bpay', accountName: f.accountName, billerCode: f.billerCode, crn: f.crn }
+        : f.method === 'payto'
+          ? { method: 'payto', accountName: f.accountName, payIdType: f.payIdType, payId: f.payId, reference: f.payRef || undefined }
+          : { method: 'bank_transfer', accountName: f.accountName, bsb: f.bsb, accountNumber: f.accountNumber, reference: f.reference || undefined },
       payrollAllocationPercent: Number(f.payrollAllocationPercent) || 0,
       roundups: { enabled: f.roundups === 'on' },
       notifications: { reminders: f.reminders, statements: f.statements, channel: f.channel },
@@ -532,12 +597,13 @@ function bindGoal(goalId) {
   const goal = service.getGoal(goalId);
   const user = service.getUser(goal.userId);
 
+  bindFeePreview('dep-amount', 'deposit-fee');
   document.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => { ui.tab = b.dataset.tab; render(); }));
 
   document.getElementById('deposit-form')?.addEventListener('submit', (e) => {
     e.preventDefault();
     run(() => service.deposit(goalId, { amount: Number(formData(e.target).amount) }),
-      (r) => (r.payout ? `🎉 Target reached! Paid out to ${goal.payoutAccount.accountName}.` : `Deposited ${aud(r.entry.amountCents)} 🐷`));
+      (r) => (r.payout ? `🎉 Target reached! Paid out to ${goal.payoutAccount.accountName}.` : `Deposited ${aud(r.entry.amountCents)} 🐷 (after ${aud(r.entry.feeCents)} fee)`));
   });
 
   document.getElementById('shop-btn')?.addEventListener('click', () => {
@@ -549,7 +615,7 @@ function bindGoal(goalId) {
   });
 
   document.getElementById('sweep-btn')?.addEventListener('click', () => run(() => service.sweepRoundups(goalId),
-    (r) => (r.payout ? '🎉 Round-ups tipped you over the line. Goal paid out!' : `🪙 Saved ${aud(r.totalCents)} in spare change`)));
+    (r) => (r.payout ? '🎉 Round-ups tipped you over the line. Goal paid out!' : `🪙 Saved ${aud(r.entry?.amountCents ?? 0)} in spare change`)));
 
   document.getElementById('enable-roundups')?.addEventListener('click', () => run(() => service.updateGoalSettings(goalId, { roundups: { enabled: true } }), 'Round-ups on 🪙'));
 
@@ -558,7 +624,7 @@ function bindGoal(goalId) {
     run(() => service.requestEarlyRelease(goalId, formData(e.target)), 'Request received. Your 7-day cooling-off starts now.');
   });
   document.getElementById('cancel-release')?.addEventListener('click', () => run(() => service.cancelEarlyRelease(goalId), 'Good call. Your goal is locked again 🔒'));
-  document.getElementById('payout-btn')?.addEventListener('click', () => run(() => service.payout(goalId), (r) => `💸 ${aud(-r.entry.amountCents)} is on its way to ${goal.payoutAccount.accountName}`));
+  document.getElementById('payout-btn')?.addEventListener('click', () => run(() => service.payout(goalId), (r) => `💸 ${aud(-r.entry.amountCents)} is on its way to ${goal.payoutAccount.accountName}${goal.payoutAccount.method === 'bpay' ? ' by BPAY' : goal.payoutAccount.method === 'payto' ? ' by PayTo' : ''}`));
 
   document.getElementById('settings-form')?.addEventListener('submit', (e) => {
     e.preventDefault();

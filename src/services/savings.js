@@ -1,4 +1,4 @@
-import { toCents, formatAud, FEE_CENTS } from '../domain/money.js';
+import { toCents, formatAud, depositFee, DEFAULT_DEPOSIT_FEE_BPS } from '../domain/money.js';
 import { buildPlan, addMonths, FREQUENCY_DAYS } from '../domain/savingsPlan.js';
 import { calculateRoundups } from '../domain/roundups.js';
 
@@ -6,6 +6,8 @@ export const GOAL_CATEGORIES = ['house', 'credit_card', 'holiday', 'emergency_fu
 export const REMINDER_FREQUENCIES = ['off', 'weekly', 'fortnightly', 'monthly'];
 export const STATEMENT_FREQUENCIES = ['off', 'monthly', 'quarterly'];
 export const CHANNELS = ['email', 'sms', 'push'];
+export const PAYOUT_METHODS = ['bank_transfer', 'bpay', 'payto'];
+export const PAYID_TYPES = ['email', 'phone', 'abn'];
 
 // Breaking a forced-savings goal early is allowed, but only after a cooling-off period.
 export const EARLY_RELEASE_COOLING_OFF_DAYS = 7;
@@ -55,8 +57,53 @@ function requireOneOf(value, field, options, fallback) {
   return v;
 }
 
-function validateAccount(account, field) {
-  if (!account || typeof account !== 'object') throw new HttpError(400, `${field} is required`);
+/**
+ * Where a finished goal is paid:
+ *  - bank_transfer: BSB + account number (e.g. a mortgage offset account)
+ *  - bpay:          biller code + customer reference number (e.g. a credit card bill)
+ *  - payto:         the biller's PayID, paid over the NPP under a PayTo agreement
+ */
+function validatePayoutDestination(dest, field) {
+  if (!dest || typeof dest !== 'object') throw new HttpError(400, `${field} is required`);
+  const method = requireOneOf(dest.method, `${field}.method`, PAYOUT_METHODS, 'bank_transfer');
+  if (method === 'bpay') {
+    const billerCode = requireString(dest.billerCode, `${field}.billerCode`).replace(/\s/g, '');
+    const crn = requireString(dest.crn, `${field}.crn`).replace(/\s/g, '');
+    if (!/^\d{3,10}$/.test(billerCode)) throw new HttpError(400, `${field}.billerCode must be 3-10 digits`);
+    if (!/^\d{2,20}$/.test(crn)) throw new HttpError(400, `${field}.crn must be 2-20 digits`);
+    return { method, accountName: requireString(dest.accountName, `${field}.accountName`), billerCode, crn };
+  }
+  if (method === 'payto') {
+    const payIdType = requireOneOf(dest.payIdType, `${field}.payIdType`, PAYID_TYPES, 'email');
+    let payId = requireString(dest.payId, `${field}.payId`);
+    if (payIdType === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(payId)) throw new HttpError(400, `${field}.payId must be an email address`);
+    if (payIdType === 'phone') {
+      payId = payId.replace(/[\s()-]/g, '').replace(/^0/, '+61');
+      if (!/^\+614\d{8}$/.test(payId)) throw new HttpError(400, `${field}.payId must be an Australian mobile number`);
+    }
+    if (payIdType === 'abn') {
+      payId = payId.replace(/\s/g, '');
+      if (!/^\d{11}$/.test(payId)) throw new HttpError(400, `${field}.payId must be an 11-digit ABN`);
+    }
+    return {
+      method,
+      accountName: requireString(dest.accountName, `${field}.accountName`),
+      payIdType,
+      payId,
+      reference: requireString(dest.reference, `${field}.reference`, { optional: true }),
+    };
+  }
+  return { method, ...validateBankAccount(dest, field) };
+}
+
+/** Human-readable destination, e.g. for statements and notifications. */
+export function describeDestination(to) {
+  if (to.method === 'bpay') return `${to.accountName} via BPAY (biller ${to.billerCode}, ref ${to.crn})`;
+  if (to.method === 'payto') return `${to.accountName} via PayTo (PayID ${to.payId})`;
+  return `${to.accountName} (${to.bsb} ${to.accountNumber})`;
+}
+
+function validateBankAccount(account, field) {
   const bsb = requireString(account.bsb, `${field}.bsb`).replace(/[\s-]/g, '');
   const accountNumber = requireString(account.accountNumber, `${field}.accountNumber`).replace(/\s/g, '');
   const accountName = requireString(account.accountName, `${field}.accountName`);
@@ -72,7 +119,8 @@ function validateAccount(account, field) {
 }
 
 export class SavingsService {
-  constructor({ store, provider, notifier, collectionAccount, clock = () => new Date() }) {
+  constructor({ store, provider, notifier, collectionAccount, clock = () => new Date(), depositFeeBps = DEFAULT_DEPOSIT_FEE_BPS }) {
+    this.depositFeeBps = depositFeeBps;
     this.store = store;
     this.provider = provider;
     this.notifier = notifier;
@@ -132,7 +180,7 @@ export class SavingsService {
         'Oinkster splits each payment across your goals using their payroll allocation percentages.',
       allocations: goals.map((g) => ({ goalId: g.id, name: g.name, percent: g.payrollAllocationPercent })),
       suggestedPerPayCents: goals.reduce((sum, g) => sum + this.planFor(g).requiredPerPeriodCents.fortnightly, 0),
-      fees: FEE_CENTS,
+      depositFeePercent: this.depositFeeBps / 100,
     };
   }
 
@@ -159,7 +207,7 @@ export class SavingsService {
     }
     if (deadline <= now) throw new HttpError(400, 'deadline must be in the future');
 
-    const payoutAccount = validateAccount(input.payoutAccount, 'payoutAccount');
+    const payoutAccount = validatePayoutDestination(input.payoutAccount, 'payoutAccount');
 
     const n = input.notifications ?? {};
     const notifications = {
@@ -223,6 +271,7 @@ export class SavingsService {
       startDate: goal.startDate,
       deadline: goal.deadline,
       now: this.now(),
+      feeBps: this.depositFeeBps,
     });
   }
 
@@ -242,7 +291,7 @@ export class SavingsService {
       if (input.roundups.enabled !== undefined) goal.roundups.enabled = input.roundups.enabled === true;
       if (input.roundups.roundTo !== undefined) goal.roundups.multipleCents = requireAmountCents(input.roundups.roundTo, 'roundups.roundTo');
     }
-    if (input.payoutAccount) goal.payoutAccount = validateAccount(input.payoutAccount, 'payoutAccount');
+    if (input.payoutAccount) goal.payoutAccount = validatePayoutDestination(input.payoutAccount, 'payoutAccount');
     // Target and deadline are deliberately not editable downwards: that's the "forced" part.
     return this.store.putGoal(goal);
   }
@@ -289,15 +338,19 @@ export class SavingsService {
 
   // ---------------------------------------------------------------- money in
 
-  #credit(goal, { amountCents, source, description, providerPaymentId }) {
+  /** Credit money in: the fee comes off the top and the rest lands in the goal. */
+  #credit(goal, { amountCents: grossCents, source, description, providerPaymentId }) {
+    const feeCents = depositFee(grossCents, this.depositFeeBps);
+    const amountCents = grossCents - feeCents;
     const entry = this.store.addLedgerEntry({
       id: crypto.randomUUID(),
       goalId: goal.id,
       userId: goal.userId,
       type: 'deposit',
       source,
+      grossCents,
+      feeCents,
       amountCents,
-      feeCents: FEE_CENTS,
       description,
       providerPaymentId,
       createdAt: this.now().toISOString(),
@@ -405,7 +458,7 @@ export class SavingsService {
       amountCents,
       to,
       description: `Oinkster: ${goal.name}`,
-      reference: to.reference ?? goal.id,
+      reference: to.crn ?? to.reference ?? goal.id,
     });
     const entry = this.store.addLedgerEntry({
       id: crypto.randomUUID(),
@@ -413,9 +466,10 @@ export class SavingsService {
       userId: goal.userId,
       type: 'payout',
       source: 'payout',
+      grossCents: -amountCents,
+      feeCents: 0,
       amountCents: -amountCents,
-      feeCents: FEE_CENTS,
-      description: `${why}: paid to ${to.accountName} (${to.bsb} ${to.accountNumber})`,
+      description: `${why}: paid to ${describeDestination(to)}`,
       providerPaymentId,
       createdAt: this.now().toISOString(),
     });
@@ -466,6 +520,7 @@ export class SavingsService {
       openingBalanceCents: openingCents,
       closingBalanceCents: openingCents + within.reduce((s, e) => s + e.amountCents, 0),
       totalsBySourceCents: bySource,
+      moneyInCents: within.filter((e) => e.type === 'deposit').reduce((s, e) => s + e.grossCents, 0),
       feesCents: within.reduce((s, e) => s + e.feeCents, 0),
       transactions: within,
     };
@@ -483,7 +538,8 @@ export class SavingsService {
       user: { id: user.id, firstName: user.firstName },
       totalSavedCents: active.reduce((s, g) => s + g.balanceCents, 0),
       totalTargetCents: active.reduce((s, g) => s + g.targetCents, 0),
-      totalFeesPaidCents: 0,
+      totalFeesPaidCents: goals.flatMap((g) => this.store.ledgerForGoal(g.id)).reduce((s, e) => s + e.feeCents, 0),
+      depositFeePercent: this.depositFeeBps / 100,
       goals,
       recentActivity: recent,
     };

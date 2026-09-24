@@ -1,3 +1,5 @@
+import { grossUp } from './money.js';
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export const FREQUENCY_DAYS = {
@@ -9,8 +11,10 @@ export const FREQUENCY_DAYS = {
 /**
  * Work out how much a user must put away each period to hit their target
  * by the deadline, and whether they are on track.
+ * `requiredPerPeriodCents` is what the user needs to put in each period. It includes
+ * the deposit fee (`feeBps`), so the goal still reaches its target after fees.
  */
-export function buildPlan({ targetCents, balanceCents, startDate, deadline, now = new Date() }) {
+export function buildPlan({ targetCents, balanceCents, startDate, deadline, now = new Date(), feeBps = 0 }) {
   const remainingCents = Math.max(targetCents - balanceCents, 0);
   const msLeft = new Date(deadline).getTime() - now.getTime();
   const daysLeft = Math.max(Math.ceil(msLeft / DAY_MS), 0);
@@ -18,7 +22,7 @@ export function buildPlan({ targetCents, balanceCents, startDate, deadline, now 
   const perPeriod = {};
   for (const [freq, days] of Object.entries(FREQUENCY_DAYS)) {
     const periodsLeft = Math.max(Math.ceil(daysLeft / days), 1);
-    perPeriod[freq] = Math.ceil(remainingCents / periodsLeft);
+    perPeriod[freq] = grossUp(Math.ceil(remainingCents / periodsLeft), feeBps);
   }
 
   // Where should the balance be today if saving evenly from start to deadline?

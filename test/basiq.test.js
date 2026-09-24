@@ -34,3 +34,13 @@ test('Basiq: surfaces API errors as 502', async () => {
   const basiq = new BasiqProvider({ apiKey: 'key', fetchImpl: impl });
   await assert.rejects(basiq.listAccounts('missing'), (err) => err.status === 502 && /nope/.test(err.message));
 });
+
+test('Basiq: refuses BPAY payouts rather than sending money to the wrong place', async () => {
+  const { impl, calls } = fakeFetch({ 'POST /token': { access_token: 'tok', expires_in: 3600 } });
+  const basiq = new BasiqProvider({ apiKey: 'key', fetchImpl: impl });
+  await assert.rejects(
+    basiq.createPayout({ amountCents: 100, to: { method: 'bpay', billerCode: '24281', crn: '123' }, reference: 'r' }),
+    (err) => err.status === 422,
+  );
+  assert.equal(calls.length, 0);
+});

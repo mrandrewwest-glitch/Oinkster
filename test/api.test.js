@@ -17,7 +17,7 @@ async function createUserAndGoal(ctx, goalOverrides = {}) {
   return { user, goal };
 }
 
-test('creates a $5000 / 6 month goal with a savings plan and no fees', async () => {
+test('creates a $5000 / 6 month goal with a savings plan', async () => {
   const ctx = setup();
   const { goal } = await createUserAndGoal(ctx);
   assert.equal(goal.targetCents, 500000);
@@ -36,13 +36,24 @@ test('validates goal input', async () => {
   await request(ctx.app).post(`/users/${user.id}/goals`).send({ name: 'x', targetAmount: 5, payoutAccount }).expect(400);
 });
 
-test('deposits from linked account and records zero fees', async () => {
+test('deposits from linked account take a 1.5% fee', async () => {
   const ctx = setup();
   const { goal } = await createUserAndGoal(ctx);
   const res = await request(ctx.app).post(`/goals/${goal.id}/deposits`).send({ amount: 250.5 }).expect(201);
-  assert.equal(res.body.goal.balanceCents, 25050);
-  assert.equal(res.body.entry.feeCents, 0);
-  assert.equal(ctx.provider.debits.length, 1);
+  // 1.5% of $250.50 = $3.7575 -> $3.76
+  assert.equal(res.body.entry.grossCents, 25050);
+  assert.equal(res.body.entry.feeCents, 376);
+  assert.equal(res.body.entry.amountCents, 24674);
+  assert.equal(res.body.goal.balanceCents, 24674);
+  assert.equal(ctx.provider.debits[0].amountCents, 25050);
+});
+
+test('the savings plan grosses up for the fee', async () => {
+  const ctx = setup();
+  const { goal } = await createUserAndGoal(ctx);
+  const monthly = goal.plan.requiredPerPeriodCents.monthly;
+  const fee = Math.round((monthly * 150) / 10000);
+  assert.ok(monthly - fee >= Math.ceil(500000 / 6));
 });
 
 test('money is locked until target or deadline (forced savings)', async () => {
@@ -55,7 +66,8 @@ test('money is locked until target or deadline (forced savings)', async () => {
   ctx.clock.now = new Date('2026-07-02T00:00:00Z');
   const paid = await request(ctx.app).post(`/goals/${goal.id}/payout`).expect(200);
   assert.equal(paid.body.goal.status, 'paid_out');
-  assert.equal(ctx.provider.payouts[0].amountCents, 10000);
+  assert.equal(paid.body.entry.feeCents, 0);
+  assert.equal(ctx.provider.payouts[0].amountCents, 9850);
 });
 
 test('early release needs a 7 day cooling-off period', async () => {
@@ -72,10 +84,13 @@ test('early release needs a 7 day cooling-off period', async () => {
 test('reaching the target automatically pays into the nominated account', async () => {
   const ctx = setup();
   const { goal } = await createUserAndGoal(ctx);
-  await request(ctx.app).post(`/goals/${goal.id}/deposits`).send({ amount: 4000 }).expect(201);
-  const res = await request(ctx.app).post(`/goals/${goal.id}/deposits`).send({ amount: 1000 }).expect(201);
+  await request(ctx.app).post(`/goals/${goal.id}/deposits`).send({ amount: 4000 }).expect(201); // $3,940 after fee
+  const partial = await request(ctx.app).post(`/goals/${goal.id}/deposits`).send({ amount: 1000 }).expect(201); // $985
+  assert.equal(partial.body.goal.status, 'active');
+  assert.equal(partial.body.goal.balanceCents, 492500);
+  const res = await request(ctx.app).post(`/goals/${goal.id}/deposits`).send({ amount: 100 }).expect(201); // $98.50
   assert.equal(res.body.goal.status, 'paid_out');
-  assert.equal(ctx.provider.payouts[0].amountCents, 500000);
+  assert.equal(ctx.provider.payouts[0].amountCents, 502350);
   assert.equal(ctx.provider.payouts[0].reference, 'LOAN123');
   await request(ctx.app).post(`/goals/${goal.id}/deposits`).send({ amount: 1 }).expect(409);
 });
@@ -103,8 +118,9 @@ test('employer payroll deposits are split across goals by allocation', async () 
 
   const g1 = (await request(ctx.app).get(`/goals/${goal.id}`)).body;
   const g2 = (await request(ctx.app).get(`/goals/${holiday.id}`)).body;
-  assert.equal(g1.balanceCents + g2.balanceCents, 30001);
-  assert.equal(g2.balanceCents, 12000);
+  // $120.00 to Japan (40%) and $180.01 to the card (60% + rounding), each less 1.5%
+  assert.equal(g2.balanceCents, 12000 - 180);
+  assert.equal(g1.balanceCents, 18001 - 270);
 });
 
 test('round-up sweep saves spare change from new purchases only', async () => {
@@ -118,7 +134,8 @@ test('round-up sweep saves spare change from new purchases only', async () => {
   ctx.clock.now = new Date('2026-01-04T00:00:00Z');
   const res = await request(ctx.app).post(`/goals/${goal.id}/roundups/sweep`).expect(200);
   assert.equal(res.body.totalCents, 25 + 90);
-  assert.equal(res.body.goal.balanceCents, 115);
+  assert.equal(res.body.entry.feeCents, 2);
+  assert.equal(res.body.goal.balanceCents, 113);
   const again = await request(ctx.app).post(`/goals/${goal.id}/roundups/sweep`).expect(200);
   assert.equal(again.body.totalCents, 0);
 });
@@ -137,11 +154,54 @@ test('statements, reminders and dashboard', async () => {
   assert.match(sent.find((n) => n.kind === 'reminder').message, /behind/);
 
   const stmt = (await request(ctx.app).get(`/goals/${goal.id}/statement`).expect(200)).body;
-  assert.equal(stmt.closingBalanceCents, 10000);
-  assert.equal(stmt.feesCents, 0);
+  assert.equal(stmt.moneyInCents, 10000);
+  assert.equal(stmt.feesCents, 150);
+  assert.equal(stmt.closingBalanceCents, 9850);
 
   const dash = (await request(ctx.app).get(`/users/${user.id}/dashboard`).expect(200)).body;
-  assert.equal(dash.totalSavedCents, 10000);
+  assert.equal(dash.totalSavedCents, 9850);
   assert.equal(dash.goals.length, 1);
-  assert.equal(dash.totalFeesPaidCents, 0);
+  assert.equal(dash.totalFeesPaidCents, 150);
+});
+
+test('pays a finished goal to a credit card by BPAY', async () => {
+  const ctx = setup();
+  const { goal } = await createUserAndGoal(ctx, {
+    targetAmount: 100,
+    payoutAccount: { method: 'bpay', accountName: 'My Visa', billerCode: '24281', crn: '4564 0012 3456 7890' },
+  });
+  assert.deepEqual(goal.payoutAccount, { method: 'bpay', accountName: 'My Visa', billerCode: '24281', crn: '4564001234567890' });
+  await request(ctx.app).post(`/goals/${goal.id}/deposits`).send({ amount: 102 }).expect(201);
+  const payout = ctx.provider.payouts[0];
+  assert.equal(payout.to.method, 'bpay');
+  assert.equal(payout.reference, '4564001234567890');
+  const stmt = (await request(ctx.app).get(`/goals/${goal.id}/statement`)).body;
+  assert.match(stmt.transactions.at(-1).description, /BPAY \(biller 24281, ref 4564001234567890\)/);
+});
+
+test('pays a finished goal by PayTo to a PayID', async () => {
+  const ctx = setup();
+  const { goal } = await createUserAndGoal(ctx, {
+    targetAmount: 100,
+    payoutAccount: { method: 'payto', accountName: 'Card Co', payIdType: 'phone', payId: '0412 345 678' },
+  });
+  assert.equal(goal.payoutAccount.payId, '+61412345678');
+  await request(ctx.app).post(`/goals/${goal.id}/deposits`).send({ amount: 102 }).expect(201);
+  assert.equal(ctx.provider.payouts[0].to.method, 'payto');
+});
+
+test('validates BPAY and PayTo details', async () => {
+  const ctx = setup();
+  const { user } = await createUserAndGoal(ctx);
+  const base = { name: 'x', targetAmount: 100, timelineMonths: 3 };
+  const bad = [
+    { method: 'bpay', accountName: 'Visa', billerCode: '12', crn: '123456' },
+    { method: 'bpay', accountName: 'Visa', billerCode: '24281', crn: 'abc' },
+    { method: 'payto', accountName: 'Co', payIdType: 'email', payId: 'not-an-email' },
+    { method: 'payto', accountName: 'Co', payIdType: 'abn', payId: '123' },
+    { method: 'cheque', accountName: 'Co' },
+  ];
+  for (const payoutAccount of bad) {
+    await request(ctx.app).post(`/users/${user.id}/goals`).send({ ...base, payoutAccount }).expect(400);
+  }
 });

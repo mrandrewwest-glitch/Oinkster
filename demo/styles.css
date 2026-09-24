@@ -110,7 +110,7 @@ main { flex: 1; max-width: 1040px; width: 100%; margin: 0 auto; padding: 8px 16p
 .chip-btn:hover, .chip-btn.active { border-color: var(--pink-deep); color: var(--pink-deep); }
 :focus-visible { outline: 3px solid var(--pink); outline-offset: 2px; }
 
-label { display: block; font-weight: 600; font-size: 0.875rem; margin-bottom: 4px; }
+label, .label { display: block; font-weight: 600; font-size: 0.875rem; margin-bottom: 4px; }
 .field { margin-bottom: 14px; }
 .hint { font-size: 0.8rem; color: var(--ink-soft); margin-top: 4px; }
 input, select {
@@ -246,4 +246,11 @@ legend { font-weight: 700; padding: 0 6px; font-family: Fraunces, Georgia, serif
   .goal-card .pig-mini { width: 64px; flex-basis: 64px; }
   th, td { padding: 8px 4px; }
   td.desc { min-width: 120px; }
+  .fee-col { display: none; }
 }
+
+.method-chip { display: inline-flex; align-items: center; gap: 6px; margin: 0; }
+.method-chip input { width: 16px; height: 16px; min-height: 0; margin: 0; accent-color: var(--pink-deep); }
+.method-chip:has(input:checked) { border-color: var(--pink-deep); color: var(--pink-deep); background: var(--pink-pale); }
+[hidden] { display: none !important; }
+.fee-badge { background: var(--surface-2); color: var(--ink); }

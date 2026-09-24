@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { calculateRoundups } from '../src/domain/roundups.js';
 import { buildPlan, addMonths } from '../src/domain/savingsPlan.js';
+import { depositFee, grossUp } from '../src/domain/money.js';
 
 test('round-ups only apply to purchases and skip whole-dollar amounts', () => {
   const { items, totalCents } = calculateRoundups([
@@ -42,4 +43,18 @@ test('plan: behind schedule halfway through', () => {
 
 test('addMonths clamps to month end', () => {
   assert.equal(addMonths(new Date('2026-01-31T00:00:00Z'), 1).toISOString(), '2026-02-28T00:00:00.000Z');
+});
+
+test('1.5% deposit fee rounds to the nearest cent', () => {
+  assert.equal(depositFee(10000, 150), 150);
+  assert.equal(depositFee(25050, 150), 376);
+  assert.equal(depositFee(33, 150), 0);
+});
+
+test('grossUp finds the smallest deposit that nets the amount after fees', () => {
+  for (const net of [1, 99, 10000, 83334, 123457]) {
+    const gross = grossUp(net, 150);
+    assert.ok(gross - depositFee(gross, 150) >= net);
+    assert.ok(gross - 1 - depositFee(gross - 1, 150) < net);
+  }
 });

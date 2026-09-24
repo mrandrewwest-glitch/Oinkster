@@ -122,6 +122,13 @@ export class BasiqProvider {
   }
 
   async createPayout({ amountCents, to, description, reference }) {
+    if (to.method && to.method !== 'bank_transfer') {
+      // Basiq payouts go to a BSB and account number. BPAY bills and PayTo/PayID
+      // need a bill-payment partner (e.g. Zepto, Monoova or Azupay) behind this interface.
+      const err = new Error(`${to.method === 'bpay' ? 'BPAY' : 'PayTo'} payouts are not supported by the Basiq provider yet`);
+      err.status = 422;
+      throw err;
+    }
     const json = await this.#request('POST', '/payments/payouts', {
       requestId: reference,
       description,

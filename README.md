@@ -1,7 +1,8 @@
 # 🐷 Oinkster — forced-savings API
 
 A digital piggy bank for adults. You set a goal, lock the money away until you hit it, and Oinkster pays it
-straight into the account you nominate: your mortgage, your credit card, or anywhere else. No fees.
+straight into the account you nominate: your mortgage, your credit card, or anywhere else, by bank transfer, BPAY or PayTo.
+One simple fee: 1.5% on money in.
 
 ## Clickable demo
 
@@ -27,8 +28,8 @@ Oinkster is built for Australia (BSBs, payroll splits, AUD), so the banking prov
 | Deposit from multiple methods | Pull money from the user's bank (PayTo / direct debit) | ✅ Payments API: payment requests (confirm PayTo is enabled on your account) |
 | Money from employer's pay | A collection account + reference employers can pay to | ⚠️ Not Basiq: use your bank partner's collection account (or a Zepto/Monoova PayID/virtual account); its credit notifications call `/webhooks/incoming-payment` |
 | Auto round-ups | Read the user's card/bank transactions | ✅ Data API (CDR accredited) |
-| Pay goal into house / credit card | Send money to any BSB + account | ✅ Payments API: payouts |
-| No fees to users | Fair, per-transaction pricing Oinkster can absorb | ✅ Usage-based pricing, free sandbox |
+| Pay goal into house / credit card | Send money to a BSB + account, a BPAY biller, or a PayID (PayTo) | ✅ Bank transfer via Payments API payouts. ⚠️ BPAY and PayTo need a bill-payment partner (e.g. Zepto, Monoova, Azupay); the Basiq adapter refuses them rather than guess |
+| 1.5% fee on money in | Per-transaction costs well under the fee | ✅ Usage-based pricing, free sandbox |
 | Developer-friendly | REST, sandbox, test banks | ✅ REST, sandbox with test institutions |
 
 **Chosen: [Basiq](https://basiq.io)** (Australian, CDR accredited, data + payments in one API).
@@ -47,8 +48,9 @@ Alternatives if needed: **Zepto** or **Monoova** (NPP/PayTo payments and virtual
 - **Savings plan**: how much to save each week, fortnight or month, whether you're on track, and milestones at 25/50/75/100%.
 - **Forced savings lock**: money stays locked until the target is reached or the deadline passes.
   Breaking a goal early needs an **early-release request plus a 7-day cooling-off period**.
-- **Payout to a nominated account**: when a goal completes it is paid automatically to the BSB and account
-  you set (with a reference, e.g. your loan number).
+- **Pay the bill directly**: when a goal completes it is paid automatically by **bank transfer**
+  (BSB and account, e.g. a mortgage), **BPAY** (biller code and CRN, e.g. a credit card), or **PayTo**
+  (the biller's PayID, over the NPP).
 - **Deposit methods**
   - one-off or top-up deposits pulled from the user's linked bank (PayTo / direct debit)
   - **employer payroll split**: each user gets a unique reference; the employer pays to the collection
@@ -56,7 +58,7 @@ Alternatives if needed: **Zepto** or **Monoova** (NPP/PayTo payments and virtual
   - bank transfer to the same account and reference
   - **round-ups** of card purchases (to the nearest $1, or any amount, e.g. $5)
 - **Reminders and statements**: weekly, fortnightly or monthly reminders by email, SMS or push; monthly or quarterly statements.
-- **No fees**: every ledger entry records `feeCents: 0`, and statements and the dashboard show it.
+- **1.5% fee on money in**: deposits, payroll, transfers and round-ups. Each ledger entry records `grossCents`, `feeCents` and the net `amountCents` that lands in the goal. Payouts are free. The savings plan grosses up for the fee, so following it still hits the target. The rate is set by `depositFeeBps` (default 150) on `SavingsService`.
 - **Dashboard**: total saved, per-goal progress and recent activity.
 
 ## Run it
@@ -102,12 +104,20 @@ POST /users/{id}/goals
   "category": "credit_card",
   "targetAmount": 5000,
   "timelineMonths": 6,
-  "payoutAccount": { "accountName": "My Visa", "bsb": "062-000", "accountNumber": "12345678", "reference": "4564..." },
+  "payoutAccount": { "method": "bpay", "accountName": "My Visa", "billerCode": "24281", "crn": "4564001234567890" },
   "payrollAllocationPercent": 50,
   "roundups": { "enabled": true, "roundTo": 1 },
   "notifications": { "reminders": "fortnightly", "statements": "monthly", "channel": "email" }
 }
 ```
+
+`payoutAccount.method` is one of:
+
+| method | fields |
+|---|---|
+| `bank_transfer` (default) | `accountName`, `bsb`, `accountNumber`, `reference?` |
+| `bpay` | `accountName` (biller name), `billerCode`, `crn` |
+| `payto` | `accountName` (payee), `payIdType` (`email`, `phone` or `abn`), `payId`, `reference?` |
 
 Amounts in requests are dollars; responses use integer cents (`targetCents`, `balanceCents`).
 
