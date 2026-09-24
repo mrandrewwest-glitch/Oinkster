@@ -1,0 +1,33 @@
+{
+  "name": "oinkster",
+  "version": "1.0.0",
+  "description": "Oinkster forced-savings API — a digital piggy bank for adults",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node --test test/*.test.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mrandrewwest-glitch/Oinkster.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "UNLICENSED",
+  "bugs": {
+    "url": "https://github.com/mrandrewwest-glitch/Oinkster/issues"
+  },
+  "homepage": "https://github.com/mrandrewwest-glitch/Oinkster#readme",
+  "dependencies": {
+    "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "supertest": "^7.3.0"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "private": true
+}
