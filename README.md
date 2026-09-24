@@ -3,6 +3,20 @@
 A digital piggy bank for adults. You set a goal, lock the money away until you hit it, and Oinkster pays it
 straight into the account you nominate: your mortgage, your credit card, or anywhere else. No fees.
 
+## Clickable demo
+
+`demo/` is a static web app that runs the real savings engine from `src/` in the browser, with a
+pretend bank. You don't need a server or API keys. It includes a **time machine** (+1 day, week or
+month) so you can show reminders, statements, the cooling-off period and deadlines in seconds.
+Each visitor's data stays in their own browser, and **Reset demo** clears it.
+
+```bash
+npm run demo   # http://localhost:5173
+```
+
+**Deploy on Netlify:** Add new site → Import from GitHub → pick this repo and branch. The
+`netlify.toml` already sets the build command (`npm run build:demo`) and publish folder (`demo-dist`).
+
 ## Which banking API, and why
 
 Oinkster is built for Australia (BSBs, payroll splits, AUD), so the banking provider has to work with

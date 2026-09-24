@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Oinkster Demo</title>
+  <meta name="description" content="Oinkster: a digital piggy bank for adults. Set a goal, lock it away, and get there. No fees.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐷</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#/"><span class="brand-pig" aria-hidden="true">🐷</span> Oinkster</a>
+    <span class="pill pill-demo">Demo</span>
+    <button class="link-btn" id="reset-btn" type="button">Reset demo</button>
+  </header>
+
+  <section class="timebar" aria-label="Time machine">
+    <span class="timebar-label">Time machine</span>
+    <span class="timebar-date" id="clock-date"></span>
+    <div class="timebar-actions">
+      <button class="chip-btn" data-jump="1" type="button">+1 day</button>
+      <button class="chip-btn" data-jump="7" type="button">+1 week</button>
+      <button class="chip-btn" data-jump="30" type="button">+1 month</button>
+    </div>
+  </section>
+
+  <main id="app" tabindex="-1"></main>
+
+  <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+  <footer class="footer">
+    Demo only: no real money moves. The savings engine is the real Oinkster code, running with a pretend bank.
+  </footer>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

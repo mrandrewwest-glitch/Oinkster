@@ -1,5 +1,4 @@
-import { randomUUID, randomBytes } from 'node:crypto';
-import { toCents, FEE_CENTS } from '../domain/money.js';
+import { toCents, formatAud, FEE_CENTS } from '../domain/money.js';
 import { buildPlan, addMonths, FREQUENCY_DAYS } from '../domain/savingsPlan.js';
 import { calculateRoundups } from '../domain/roundups.js';
 
@@ -29,6 +28,10 @@ export class HttpError extends Error {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+function randomHex(bytes) {
+  return Array.from(crypto.getRandomValues(new Uint8Array(bytes)), (b) => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+}
 
 function requireString(value, field, { optional = false } = {}) {
   if (value === undefined || value === null || value === '') {
@@ -86,14 +89,14 @@ export class SavingsService {
     const mobile = requireString(input.mobile, 'mobile', { optional: true });
     const { providerUserId } = await this.provider.createUser({ email, mobile, firstName, lastName });
     const user = {
-      id: randomUUID(),
+      id: crypto.randomUUID(),
       email,
       mobile,
       firstName,
       lastName,
       providerUserId,
       // Unique reference the employer quotes when paying part of a salary to Oinkster.
-      payrollReference: `OINK${randomBytes(4).toString('hex').toUpperCase()}`,
+      payrollReference: `OINK${randomHex(4)}`,
       createdAt: this.now().toISOString(),
     };
     return this.store.putUser(user);
@@ -187,7 +190,7 @@ export class SavingsService {
     }
 
     const goal = {
-      id: randomUUID(),
+      id: crypto.randomUUID(),
       userId,
       name,
       category,
@@ -288,7 +291,7 @@ export class SavingsService {
 
   #credit(goal, { amountCents, source, description, providerPaymentId }) {
     const entry = this.store.addLedgerEntry({
-      id: randomUUID(),
+      id: crypto.randomUUID(),
       goalId: goal.id,
       userId: goal.userId,
       type: 'deposit',
@@ -318,7 +321,7 @@ export class SavingsService {
       providerUserId: user.providerUserId,
       amountCents,
       description: `Oinkster: ${goal.name}`,
-      reference: randomUUID(),
+      reference: crypto.randomUUID(),
     });
     const entry = this.#credit(goal, { amountCents, source: 'bank_debit', description: 'Deposit from linked account', providerPaymentId });
     const payout = await this.#maybeAutoPayout(goal);
@@ -376,7 +379,7 @@ export class SavingsService {
       providerUserId: user.providerUserId,
       amountCents: totalCents,
       description: `Oinkster round-ups: ${goal.name}`,
-      reference: randomUUID(),
+      reference: crypto.randomUUID(),
     });
     const entry = this.#credit(goal, {
       amountCents: totalCents,
@@ -405,7 +408,7 @@ export class SavingsService {
       reference: to.reference ?? goal.id,
     });
     const entry = this.store.addLedgerEntry({
-      id: randomUUID(),
+      id: crypto.randomUUID(),
       goalId: goal.id,
       userId: goal.userId,
       type: 'payout',
@@ -424,7 +427,7 @@ export class SavingsService {
       userId: goal.userId,
       channel: goal.notifications.channel,
       kind: 'goal_paid_out',
-      message: `Nice work! ${goal.name} is done and ${(amountCents / 100).toFixed(2)} is on its way to ${to.accountName}.`,
+      message: `Nice work! ${goal.name} is done and ${formatAud(amountCents)} is on its way to ${to.accountName}.`,
     });
     return { entry, providerStatus: status };
   }

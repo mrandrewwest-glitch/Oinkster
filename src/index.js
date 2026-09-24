@@ -1,10 +1,10 @@
 import { createApp } from './app.js';
-import { Store } from './store.js';
+import { createFileStore } from './fileStore.js';
 import { createProvider } from './providers/index.js';
 import { Notifier } from './services/notifier.js';
 import { SavingsService } from './services/savings.js';
 
-const store = new Store({ file: process.env.DATA_FILE });
+const store = createFileStore(process.env.DATA_FILE);
 const provider = createProvider();
 const notifier = new Notifier({
   store,

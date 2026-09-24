@@ -1,0 +1,7 @@
+# Netlify deploys the clickable demo (a static site; no server or API keys needed).
+[build]
+  command = "npm run build:demo"
+  publish = "demo-dist"
+
+[build.environment]
+  NODE_VERSION = "22"

@@ -1,24 +1,22 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
-
 /**
- * Minimal store: in-memory collections, optionally snapshotted to a JSON file.
+ * Minimal store: in-memory collections with a pluggable `persist` hook
+ * (a JSON file on the server, localStorage in the browser demo).
  * Swap for Postgres before production. The service only uses the methods below.
  */
+export function emptyData() {
+  return { users: {}, goals: {}, ledger: [], notifications: [] };
+}
+
 export class Store {
-  constructor({ file } = {}) {
-    this.file = file;
-    this.data = { users: {}, goals: {}, ledger: [], notifications: [] };
-    if (file && existsSync(file)) this.data = JSON.parse(readFileSync(file, 'utf8'));
+  constructor({ data, persist } = {}) {
+    this.data = data ?? emptyData();
+    this.persist = persist ?? (() => {});
   }
 
-  save() {
-    if (!this.file) return;
-    mkdirSync(dirname(this.file), { recursive: true });
-    writeFileSync(this.file, JSON.stringify(this.data, null, 2));
-  }
+  save() { this.persist(this.data); }
 
   getUser(id) { return this.data.users[id] ?? null; }
+  allUsers() { return Object.values(this.data.users); }
   findUserByPayrollReference(ref) {
     return Object.values(this.data.users).find((u) => u.payrollReference === ref) ?? null;
   }

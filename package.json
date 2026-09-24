@@ -6,7 +6,9 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "build:demo": "node scripts/build-demo.mjs",
+    "demo": "npm run build:demo && node scripts/serve-demo.mjs"
   },
   "repository": {
     "type": "git",
